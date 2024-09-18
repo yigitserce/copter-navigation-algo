@@ -1901,6 +1901,47 @@ void AP_Mission::advance_current_do_cmd()
     start_command(_do_cmd);
 }
 
+bool AP_Mission::manipulate_cmd(uint16_t index, Mission_Command new_cmd)
+{
+    std::vector<Mission_Command> cmds;
+    Mission_Command temp_cmd;
+
+    new_cmd.index = index;
+
+    cmds.push_back(new_cmd);
+
+    // read all original commands;
+    for (uint16_t curr_index = index; curr_index < (unsigned)_cmd_total; curr_index++)
+    {
+        // load the next command
+        if (read_cmd_from_storage(curr_index, temp_cmd))
+        {
+            temp_cmd.index +=1;
+            cmds.push_back(temp_cmd);
+        }
+        else
+        {
+            // this should never happen because of check above but just in case
+            gcs().send_text(MAV_SEVERITY_WARNING, "index %d okunamadi",int(curr_index));
+            return false;
+        }
+    }
+
+    _cmd_total.set_and_save(_cmd_total + 1);
+
+    // write all commands with the manupilated one
+    for (uint16_t curr_index = index; curr_index <= (unsigned)_cmd_total; curr_index++)
+    {
+        if (!write_cmd_to_storage(curr_index, cmds[curr_index - index]))
+        {
+            gcs().send_text(MAV_SEVERITY_WARNING, "index %d yazamadi",int(curr_index));
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /// get_next_cmd - gets next command found at or after start_index
 ///     returns true if found, false if not found (i.e. mission complete)
 ///     accounts for do_jump commands

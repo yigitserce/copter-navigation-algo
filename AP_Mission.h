@@ -400,6 +400,9 @@ public:
     /// init - initialises this library including checks the version in eeprom matches this library
     void init();
 
+    uint32_t prev;
+
+
     /// status - returns the status of the mission (i.e. Mission_Started, Mission_Complete, Mission_Stopped
     mission_state state() const
     {
@@ -528,6 +531,9 @@ public:
     {
         return _do_cmd.id;
     }
+
+    // add new_cmd to specified index
+    bool manipulate_cmd(uint16_t index, Mission_Command new_cmd);
 
     // set_current_cmd - jumps to command specified by index
     bool set_current_cmd(uint16_t index, bool rewind = false);

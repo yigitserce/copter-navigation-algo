@@ -221,6 +221,7 @@ protected:
     static float auto_takeoff_no_nav_alt_cm;
 
     // auto takeoff variables
+    static float auto_takeoff_start_alt_cm;     // start altitude expressed as cm above ekf origin
     static float auto_takeoff_complete_alt_cm;  // completion altitude expressed in cm above ekf origin or above terrain (depending upon auto_takeoff_terrain_alt)
     static bool auto_takeoff_terrain_alt;       // true if altitudes are above terrain
     static bool auto_takeoff_complete;          // true when takeoff is complete
@@ -412,6 +413,10 @@ public:
     bool is_autopilot() const override { return true; }
     bool in_guided_mode() const override { return _mode == SubMode::NAVGUIDED || _mode == SubMode::NAV_SCRIPT_TIME; }
 
+    uint32_t prev;
+    int rtrn = -1;
+    AP_Mission::Mission_Command curr_cmd;
+
     // Auto modes
     enum class SubMode : uint8_t {
         TAKEOFF,
@@ -454,6 +459,13 @@ public:
     bool set_speed_down(float speed_down_cms) override;
 
     bool requires_terrain_failsafe() const override { return true; }
+
+    long double deg2rad(long double deg_val); //added by yigit
+    long double rad2deg(long double rad_val); //added by yigit
+    long double norm(Vector3ld vec); //added by yigit
+    long double calcDistance(long double lat1, long double lon1, long double lat2, long double lon2); // added by yigit
+    Vector2ld calculate_new_location(long double lat1, long double lon1, float distance, int bearing); // added by yigit
+    Vector2ld convert_loc_to_double(const AP_Mission::Mission_Command cmd); //added by yigit
 
     // return true if this flight mode supports user takeoff
     //  must_nagivate is true if mode must also control horizontal position
@@ -512,6 +524,7 @@ private:
     void loiter_run();
     void loiter_to_alt_run();
     void nav_attitude_time_run();
+    Location set_turn_wp(const Vector2ld curr_loc, const Vector2ld next_loc); //added by yigit
 
     Location loc_from_cmd(const AP_Mission::Mission_Command& cmd, const Location& default_loc) const;
 
@@ -950,7 +963,8 @@ public:
     // use_thrust: IF true: climb_rate_cms_or_thrust represents thrust
     //             IF false: climb_rate_cms_or_thrust represents climb_rate (cm/s)
     void set_angle(const Quaternion &attitude_quat, const Vector3f &ang_vel, float climb_rate_cms_or_thrust, bool use_thrust);
-
+    void guid_turn_limit_loc(const Location& dest_loc);
+    void guid_turn_limit_vec(const Vector3f& destination);
     bool set_destination(const Vector3f& destination, bool use_yaw = false, float yaw_cd = 0.0, bool use_yaw_rate = false, float yaw_rate_cds = 0.0, bool yaw_relative = false, bool terrain_alt = false);
     bool set_destination(const Location& dest_loc, bool use_yaw = false, float yaw_cd = 0.0, bool use_yaw_rate = false, float yaw_rate_cds = 0.0, bool yaw_relative = false);
     bool get_wp(Location &loc) const override;
@@ -1048,6 +1062,7 @@ private:
     void pause_control_run();
     void posvelaccel_control_run();
     void set_yaw_state(bool use_yaw, float yaw_cd, bool use_yaw_rate, float yaw_rate_cds, bool relative_angle);
+    //bool heading_setting(bool& relative_yaw);   //KGS Team
 
     // controls which controller is run (pos or vel):
     SubMode guided_mode = SubMode::TakeOff;

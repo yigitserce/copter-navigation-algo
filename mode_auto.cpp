@@ -83,6 +83,7 @@ void ModeAuto::run()
 {
     // start or update mission
     if (waiting_to_start) {
+        
         // don't start the mission until we have an origin
         Location loc;
         if (copter.ahrs.get_origin(loc)) {
@@ -106,6 +107,49 @@ void ModeAuto::run()
                 }
             }
         }
+
+        // added by yigit
+        if (curr_cmd.index > 0) {
+            bool is_curr_cmd_completed = verify_command(curr_cmd);
+
+            if (rtrn > -1 && is_curr_cmd_completed) {
+                rtrn = -1;
+                gcs().send_text(MAV_SEVERITY_INFO,"INSTANT TURN ACTIVE");
+            }
+        }
+
+        if (rtrn <= -1 && curr_cmd.index > 2) {
+            float x_vel = inertial_nav.get_velocity_neu_cms().x;
+            float y_vel = inertial_nav.get_velocity_neu_cms().y;
+            float x_vel_target = pos_control->get_vel_desired_cms().x;
+            float y_vel_target = pos_control->get_vel_desired_cms().y;
+            float vectors_dot_product = (x_vel * x_vel_target) + (y_vel * y_vel_target);
+            float vectors_scaler_product = (sqrtf(powf(x_vel,2) + powf(y_vel,2)) * sqrtf(powf(x_vel_target,2) + powf(y_vel_target,2)));
+            if (abs(vectors_dot_product) > 0 && abs(vectors_scaler_product) > 0) {
+                if ((vectors_dot_product / vectors_scaler_product) <= 1) {
+                    float vector_ang = rad2deg(acosf(vectors_dot_product / vectors_scaler_product));
+                    if (abs(vector_ang) >= 150) {
+                        AP_Mission::Mission_Command new_cmd(curr_cmd);
+                        AP_Mission::Mission_Command prev_cmd;
+                        AP::mission()->read_cmd_from_storage(curr_cmd.index - 1, prev_cmd);
+                        // if (!mission.get_next_nav_cmd(cmd.index+1, new_cmd)) 
+                        // {
+                        //     return true;
+                        // }
+
+                        Vector2ld curr_loc = convert_loc_to_double(curr_cmd); // added by yigit
+                        Vector2ld prev_loc = convert_loc_to_double(prev_cmd); // added by yigit
+                        Location new_wp_loc = set_turn_wp(curr_loc, prev_loc); // added by yigit
+
+                        new_cmd.content.location.lng = new_wp_loc.lng; // added by yigit
+                        new_cmd.content.location.lat = new_wp_loc.lat; // added by yigit
+                        rtrn = AP::mission()->manipulate_cmd(new_cmd.index, new_cmd);
+                        gcs().send_text(MAV_SEVERITY_INFO,"CURR: %d, NEW: %d", curr_cmd.index, new_cmd.index);
+                    }
+                }
+            }
+        }
+
 
         mission.update();
     }
@@ -579,6 +623,139 @@ bool ModeAuto::set_speed_down(float speed_down_cms)
     copter.wp_nav->set_speed_down(speed_down_cms);
     return true;
 }
+//added by yigit
+long double ModeAuto::deg2rad(long double deg_val) {
+    return deg_val * (3.141592653589793238463/180.0);
+}
+
+//added by yigit
+long double ModeAuto::rad2deg(long double rad_val) {
+    return rad_val * (180.0/3.141592653589793238463);
+}
+
+//added by yigit
+long double ModeAuto::norm(Vector3ld vec)
+{
+    return sqrtf(abs(vec.x + vec.y));
+}
+
+//added by yigit
+long double ModeAuto::calcDistance(long double lat1, long double lon1, long double lat2, long double lon2) {
+    int R = 6371;
+    long double dLat = deg2rad(lat2-lat1);
+    long double dLon = deg2rad(lon2-lon1);
+    long double a = sinf(dLat/2) * sinf(dLat/2) + cosf(deg2rad(lat1)) * cosf(deg2rad(lat2)) * sinf(dLon/2) * sinf(dLon/2);
+    long double c = 2 * atan2f(sqrtf(a), sqrtf(1-a));
+    return R * c;
+}
+
+//added by yigit
+Vector2ld ModeAuto::calculate_new_location(long double lat1, long double lon1, float distance, int bearing) {
+    int R = 6371;
+    long double lat1_rad = deg2rad(lat1);
+    long double lon1_rad = deg2rad(lon1);
+    long double bearing_rad = deg2rad(bearing);
+    long double lat2_rad = asinf(sinf(lat1_rad) * cosf(distance / R) + cosf(lat1_rad) * sinf(distance / R) * cosf(bearing_rad));
+    long double lon2_rad = lon1_rad + atan2f(sinf(bearing_rad) * sinf(distance / R) * cosf(lat1_rad), cosf(distance / R) - sinf(lat1_rad) * sinf(lat2_rad));
+    long double lat2 = rad2deg(lat2_rad);
+    long double lon2 = rad2deg(lon2_rad);
+    return { lat2, lon2 };
+}
+
+//added by yigit
+Vector2ld ModeAuto::convert_loc_to_double(const AP_Mission::Mission_Command cmd) {
+    return { ((long double)cmd.content.location.lat / 10000000) , ((long double)cmd.content.location.lng / 10000000) };
+}
+
+//added by yigit
+Location ModeAuto::set_turn_wp(const Vector2ld curr_loc, const Vector2ld next_loc) {
+    Location new_wp;
+    int bearing_next_1 = (int)get_bearing_cd({(float)next_loc.x, (float)next_loc.y}, {(float)curr_loc.x, (float)curr_loc.y}) * 0.01; // added by yigit
+    int bearing_next_2 = (int)get_bearing_cd({(float)curr_loc.x, (float)curr_loc.y}, {(float)next_loc.x, (float)next_loc.y}) * 0.01; // added by yigit
+
+    long double distance = calcDistance(curr_loc.x, curr_loc.y, next_loc.x, next_loc.y);
+    double gain_r = 0.55f;
+
+    // TODO open here when dynamic gain_r added
+    // if (gain_r == 0.5f |55| gain_r < 0.15f || gain_r > 0.85f) {
+    //     gcs().send_text(MAV_SEVERITY_WARNING,"Yaricap Gecersiz Aralikta: %f", gain_r);
+    // }
+
+    long double r1 = distance * (long double)gain_r;
+    long double r2 = distance - r1;
+
+    // gcs().send_text(MAV_SEVERITY_DEBUG,"DIST:%f, R1:%f, R2:%f", (double)distance, (double)r1, (double)r2);
+
+    long double angle_rad;
+    long double distance_external_sphere;
+    Vector2ld external_point;
+
+    Vector2ld sphere_point_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_1);
+    Vector2ld sphere_point_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_2);
+
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "sph1:(%d,%d) | sph2:(%d,%d)", (int32_t)(sphere_point_1.x * 10000000), (int32_t)(sphere_point_1.y * 10000000), (int32_t)(sphere_point_2.x * 10000000), (int32_t)(sphere_point_2.y * 10000000)); // added by yigit
+
+    if (r1 > r2) {
+        long double length = ((2 * powf(r1, 2)) / (r2 - r1));
+        external_point = calculate_new_location(sphere_point_1.x, sphere_point_1.y, length, bearing_next_1);
+        distance_external_sphere = sqrtf(powf(external_point.x - sphere_point_2.x,2) + powf(external_point.y - sphere_point_2.y,2));
+        angle_rad = acosf(r1/(2*r2+r1+distance_external_sphere));
+    } else {
+        long double length = (2 * powf(r2, 2)) / (r1 - r2);
+        external_point = calculate_new_location(sphere_point_2.x, sphere_point_2.y, length, bearing_next_2);
+        distance_external_sphere = sqrtf(powf(external_point.x - sphere_point_1.x,2) + powf(external_point.y - sphere_point_1.y,2));
+        angle_rad = acosf(r2 / (2 * r1 + r2 + distance_external_sphere));
+        // angle_rad = 3.1416 - angle_rad;
+    }
+
+    long double angle_deg = rad2deg(angle_rad);
+
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "EXTERNAL:(%d,%d)", (int32_t)(external_point.x * 10000000), (int32_t)(external_point.y * 10000000)); // added by yigit
+
+    Vector2ld prependicular_1;
+    Vector2ld prependicular_2;
+
+    //TODO add turn direction condition
+    if (1) {
+       if (r1 > r2) {
+            prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_2 - angle_deg);
+            prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_2 - angle_deg);
+        } else {
+            prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_1 + angle_deg);
+            prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_1 + angle_deg);
+        }
+    } else {
+       if (r1 > r2) {
+            prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_2 + angle_deg);
+            prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_2 + angle_deg);
+        } else {
+            prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_1 - angle_deg);
+            prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_1 - angle_deg);
+        } 
+    }
+    
+    long double prep_diff = calcDistance(prependicular_1.x, prependicular_1.y, prependicular_2.x, prependicular_2.y) / 2;
+    int bearing_new_wp;
+    bearing_new_wp = (int)get_bearing_cd({(float)prependicular_1.x, (float)prependicular_1.y}, {(float)prependicular_2.x, (float)prependicular_2.y}) * 0.01; // added by yigit
+
+    Vector2ld new_wp_loc = calculate_new_location(prependicular_1.x, prependicular_1.y, prep_diff, bearing_new_wp);
+
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Angle:(%f)", (double)(angle_deg)); // added by yigit
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Prependicular1:(%d,%d)", (int32_t)(prependicular_1.x * 10000000), (int32_t)(prependicular_1.y * 10000000)); // added by yigit
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Prependicular2:(%d,%d)", (int32_t)(prependicular_2.x * 10000000), (int32_t)(prependicular_2.y * 10000000)); // added by yigit
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "New WP:(%d,%d)", (int32_t)(new_wp_loc.x * 10000000), (int32_t)(new_wp_loc.y * 10000000)); // added by yigit
+
+    // set new loc
+    new_wp.lng = (int32_t)(new_wp_loc.y * 10000000);
+    new_wp.lat = (int32_t)(new_wp_loc.x * 10000000);
+    return new_wp;
+}
+
+template <typename T>
+const T& min(const T& a, const T& b)
+{
+    return (b < a) ? b : a;
+}
 
 // start_command - this function will be called when the ap_mission lib wishes to start a new command
 bool ModeAuto::start_command(const AP_Mission::Mission_Command& cmd)
@@ -586,6 +763,14 @@ bool ModeAuto::start_command(const AP_Mission::Mission_Command& cmd)
     // To-Do: logging when new commands start/end
     if (copter.should_log(MASK_LOG_CMD)) {
         copter.logger.Write_Mission_Cmd(mission, cmd);
+    }
+
+    uint32_t now = AP_HAL::native_millis();
+
+    if (now - prev > 3000)
+    {
+        gcs().send_text(MAV_SEVERITY_INFO,"Index: %d returned: %d ", cmd.index, rtrn);
+        prev = now;
     }
 
     switch(cmd.id) {
@@ -599,8 +784,11 @@ bool ModeAuto::start_command(const AP_Mission::Mission_Command& cmd)
         break;
 
     case MAV_CMD_NAV_WAYPOINT:                  // 16  Navigate to Waypoint
-        do_nav_wp(cmd);
+    {
+        curr_cmd = cmd; //added by yigit
+        do_nav_wp(cmd); 
         break;
+    }
 
     case MAV_CMD_NAV_VTOL_LAND:
     case MAV_CMD_NAV_LAND:              // 21 LAND to Waypoint
