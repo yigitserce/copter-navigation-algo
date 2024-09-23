@@ -413,9 +413,11 @@ public:
     bool is_autopilot() const override { return true; }
     bool in_guided_mode() const override { return _mode == SubMode::NAVGUIDED || _mode == SubMode::NAV_SCRIPT_TIME; }
 
-    uint32_t prev;
+    uint32_t prev_command_time;
+    bool do_smooth_command;
     int rtrn = -1;
     AP_Mission::Mission_Command curr_cmd;
+    int prev_cmd_index;
 
     // Auto modes
     enum class SubMode : uint8_t {
@@ -460,13 +462,13 @@ public:
 
     bool requires_terrain_failsafe() const override { return true; }
 
-    long double deg2rad(long double deg_val); //added by yigit
-    long double rad2deg(long double rad_val); //added by yigit
-    long double norm(Vector3ld vec); //added by yigit
-    long double calcDistance(long double lat1, long double lon1, long double lat2, long double lon2); // added by yigit
-    Vector2ld calculate_new_location(long double lat1, long double lon1, float distance, int bearing); // added by yigit
-    Vector2ld convert_loc_to_double(const AP_Mission::Mission_Command cmd); //added by yigit
-
+    float deg2rad(float deg_val); //added by yigit
+    float rad2deg(float rad_val); //added by yigit
+    float calc_distance_two_loc(float lat1, float lon1, float lat2, float lon2); // added by yigit
+    Vector2f calculate_new_location(float lat1, float lon1, float distance, int bearing); // added by yigit
+    Vector2f convert_loc_to_double(const AP_Mission::Mission_Command cmd); //added by yigit
+    Vector2f convert_loc_to_double(int32_t lat, int32_t lng);
+    
     // return true if this flight mode supports user takeoff
     //  must_nagivate is true if mode must also control horizontal position
     virtual bool has_user_takeoff(bool must_navigate) const override { return false; }
@@ -524,7 +526,7 @@ private:
     void loiter_run();
     void loiter_to_alt_run();
     void nav_attitude_time_run();
-    Location set_turn_wp(const Vector2ld curr_loc, const Vector2ld next_loc); //added by yigit
+    Location set_turn_wp(const Vector2f curr_loc, const Vector2f next_loc); //added by yigit
 
     Location loc_from_cmd(const AP_Mission::Mission_Command& cmd, const Location& default_loc) const;
 
