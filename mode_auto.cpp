@@ -23,7 +23,7 @@
 bool ModeAuto::init(bool ignore_checks)
 {
     auto_RTL = false;
-    do_smooth_command = false;
+    is_smooth_command = false;
     if (mission.num_commands() > 1 || ignore_checks) {
         // reject switching to auto mode if landed with motors armed but first command is not a takeoff (reduce chance of flips)
         if (motors->armed() && copter.ap.land_complete && !mission.starts_with_takeoff_cmd()) {
@@ -121,7 +121,7 @@ void ModeAuto::run()
             }
         }
 
-        if (rtrn <= -1 && curr_cmd.index > 2 && !do_smooth_command) {
+        if (rtrn <= -1 && curr_cmd.index > 2 && !is_smooth_command) {
             float x_vel = inertial_nav.get_velocity_neu_cms().x;
             float y_vel = inertial_nav.get_velocity_neu_cms().y;
             float x_vel_target = pos_control->get_vel_desired_cms().x;
@@ -135,15 +135,15 @@ void ModeAuto::run()
                         AP_Mission::Mission_Command next_check_cmd(curr_cmd);
                         if (mission.get_next_nav_cmd(curr_cmd.index + 1, next_check_cmd)) // ok
                         {
-                            do_smooth_command = true;
-                            prev_command_time = now;                  
+                            is_smooth_command = true;
+                            prev_command_time = now; 
                         }
                     }
                 }
             }
         }
 
-        if ((now - prev_command_time > 300 && do_smooth_command))
+        if ((now - prev_command_time > 300 && is_smooth_command))
         {
             AP_Mission::Mission_Command new_cmd(curr_cmd);
             AP_Mission::Mission_Command prev_cmd;
@@ -157,7 +157,7 @@ void ModeAuto::run()
             new_cmd.content.location.lng = new_wp_loc.lng; // added by yigit
             new_cmd.content.location.lat = new_wp_loc.lat; // added by yigit
             rtrn = AP::mission()->manipulate_cmd(new_cmd.index, new_cmd);
-            do_smooth_command = false;
+            is_smooth_command = false;
         }
 
         mission.update();
@@ -679,8 +679,8 @@ Vector2f ModeAuto::convert_loc_to_double(int32_t lat, int32_t lng) {
 //added by yigit
 Location ModeAuto::set_turn_wp(const Vector2f curr_loc, const Vector2f next_loc) {
     Location new_wp;
-    int bearing_next_1 = (int)get_bearing_cd({(float)next_loc.x, (float)next_loc.y}, {(float)curr_loc.x, (float)curr_loc.y}) * 0.01; // added by yigit
-    int bearing_next_2 = (int)get_bearing_cd({(float)curr_loc.x, (float)curr_loc.y}, {(float)next_loc.x, (float)next_loc.y}) * 0.01; // added by yigit
+    int bearing_next_1 = (int)get_bearing_cd({next_loc.x, next_loc.y}, {curr_loc.x, curr_loc.y}) * 0.01; // added by yigit
+    int bearing_next_2 = (int)get_bearing_cd({curr_loc.x, curr_loc.y}, {next_loc.x, next_loc.y}) * 0.01; // added by yigit
 
     //calculate stop displacement
     float thrust_x = pos_control->get_thrust_vector().x;
@@ -754,14 +754,30 @@ Location ModeAuto::set_turn_wp(const Vector2f curr_loc, const Vector2f next_loc)
     }
     
     float prep_diff = calc_distance_two_loc(prependicular_1.x, prependicular_1.y, prependicular_2.x, prependicular_2.y) / 2;
-    int bearing_new_wp;
-    bearing_new_wp = (int)get_bearing_cd({(float)prependicular_1.x, (float)prependicular_1.y}, {(float)prependicular_2.x, (float)prependicular_2.y}) * 0.01; // added by yigit
+    int bearing_new_wp = (int)get_bearing_cd({prependicular_1.x, prependicular_1.y}, {prependicular_2.x, prependicular_2.y}) * 0.01; // added by yigit
 
     Vector2f new_wp_loc = calculate_new_location(prependicular_1.x, prependicular_1.y, prep_diff, bearing_new_wp);
 
+    //reset distance from current location and new waypoint
+    float vehicle_distance_from_new_wp = calc_distance_two_loc(new_wp_loc.x, new_wp_loc.y, vehicle_cur_loc.x, vehicle_cur_loc.y);
+
+    //optimize distance
+    // if (vehicle_distance_from_new_wp >= 0.4) {
+    //     vehicle_distance_from_new_wp /= 2;
+    // } 
+    // else if (vehicle_distance_from_new_wp > 0.2 && vehicle_distance_from_new_wp < 0.4) {
+    //     vehicle_distance_from_new_wp /= 1.2;
+    // }
+    vehicle_distance_from_new_wp /= 2;
+
+    int bearing_for_optimized_wp = (int)get_bearing_cd({vehicle_cur_loc.x, vehicle_cur_loc.y}, {new_wp_loc.x, new_wp_loc.y}) * 0.01; // added by yigit
+    Vector2f new_optimized_wp_loc = calculate_new_location(vehicle_cur_loc.x, vehicle_cur_loc.y, vehicle_distance_from_new_wp, bearing_for_optimized_wp);
+    
+    gcs().send_text(MAV_SEVERITY_DEBUG,"Optimized: (%f,%f)", new_wp_loc.x, new_wp_loc.y);
+
     // set new loc
-    new_wp.lng = (int32_t)(new_wp_loc.y * 10000000);
-    new_wp.lat = (int32_t)(new_wp_loc.x * 10000000);
+    new_wp.lng = (int32_t)(new_optimized_wp_loc.y * 10000000);
+    new_wp.lat = (int32_t)(new_optimized_wp_loc.x * 10000000);
     return new_wp;
 }
 
