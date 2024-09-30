@@ -110,8 +110,7 @@ void ModeAuto::run()
                 }
             }
         }
-
-        // added by yigit
+        
         if (curr_cmd.index > 0) {
             bool is_curr_cmd_completed = verify_command(curr_cmd);
 
@@ -121,7 +120,8 @@ void ModeAuto::run()
             }
         }
 
-        if (rtrn <= -1 && curr_cmd.index > 2 && !is_smooth_command) {
+        // if (rtrn <= -1 && !is_smooth_command && prev_cmd_index > 1) {
+        if (rtrn <= -1 && !is_smooth_command) {
             float x_vel = inertial_nav.get_velocity_neu_cms().x;
             float y_vel = inertial_nav.get_velocity_neu_cms().y;
             float x_vel_target = pos_control->get_vel_desired_cms().x;
@@ -143,21 +143,23 @@ void ModeAuto::run()
             }
         }
 
-        if ((now - prev_command_time > 300 && is_smooth_command))
+        if ((now - prev_command_time > 3000 && is_smooth_command))
         {
             AP_Mission::Mission_Command new_cmd(curr_cmd);
             AP_Mission::Mission_Command prev_cmd;
             AP::mission()->read_cmd_from_storage(prev_cmd_index, prev_cmd); 
 
-            Vector2f curr_loc = convert_loc_to_double(curr_cmd); // added by yigit
-            Vector2f prev_loc = convert_loc_to_double(prev_cmd); // added by yigit
+            Vector2f curr_loc = convert_loc_to_double(curr_cmd); 
+            Vector2f prev_loc = convert_loc_to_double(prev_cmd); 
+            float distance = calc_distance_two_loc(curr_loc.x, curr_loc.y, prev_loc.x, prev_loc.y);
+            if (abs(distance) > 0) {
+                Location new_wp_loc = set_turn_wp(curr_loc, prev_loc); 
 
-            Location new_wp_loc = set_turn_wp(curr_loc, prev_loc); // added by yigit
-
-            new_cmd.content.location.lng = new_wp_loc.lng; // added by yigit
-            new_cmd.content.location.lat = new_wp_loc.lat; // added by yigit
-            rtrn = AP::mission()->manipulate_cmd(new_cmd.index, new_cmd);
-            is_smooth_command = false;
+                new_cmd.content.location.lng = new_wp_loc.lng; 
+                new_cmd.content.location.lat = new_wp_loc.lat; 
+                rtrn = AP::mission()->manipulate_cmd(new_cmd.index, new_cmd);
+                is_smooth_command = false;
+            }
         }
 
         mission.update();
@@ -633,17 +635,14 @@ bool ModeAuto::set_speed_down(float speed_down_cms)
     return true;
 }
 
-//added by yigit
 float ModeAuto::deg2rad(float deg_val) {
     return deg_val * (3.141592653589793238463/180.0);
 }
 
-//added by yigit
 float ModeAuto::rad2deg(float rad_val) {
     return rad_val * (180.0/3.141592653589793238463);
 }
 
-//added by yigit
 float ModeAuto::calc_distance_two_loc(float lat1, float lon1, float lat2, float lon2) {
     int R = 6371;
     float dLat = deg2rad(lat2-lat1);
@@ -653,7 +652,6 @@ float ModeAuto::calc_distance_two_loc(float lat1, float lon1, float lat2, float 
     return R * c;
 }
 
-//added by yigit
 Vector2f ModeAuto::calculate_new_location(float lat1, float lon1, float distance, int bearing) {
     int R = 6371;
     float lat1_rad = deg2rad(lat1);
@@ -666,21 +664,19 @@ Vector2f ModeAuto::calculate_new_location(float lat1, float lon1, float distance
     return { lat2, lon2 };
 }
 
-//added by yigit
 Vector2f ModeAuto::convert_loc_to_double(const AP_Mission::Mission_Command cmd) {
-    return { ((float)cmd.content.location.lat / 10000000) , ((float)cmd.content.location.lng / 10000000) };
+    return { ((float)cmd.content.location.lat / 10000000), ((float)cmd.content.location.lng / 10000000) };
 }
 
-//added by yigit
 Vector2f ModeAuto::convert_loc_to_double(int32_t lat, int32_t lng) {
-    return { ((float)lat / 10000000) , ((float)lng / 10000000) };
+    return { ((float)lat / 10000000), ((float)lng / 10000000) };
 }
 
-//added by yigit
 Location ModeAuto::set_turn_wp(const Vector2f curr_loc, const Vector2f next_loc) {
     Location new_wp;
-    int bearing_next_1 = (int)get_bearing_cd({next_loc.x, next_loc.y}, {curr_loc.x, curr_loc.y}) * 0.01; // added by yigit
-    int bearing_next_2 = (int)get_bearing_cd({curr_loc.x, curr_loc.y}, {next_loc.x, next_loc.y}) * 0.01; // added by yigit
+    // get bearings from each point
+    int bearing_next_1 = (int)get_bearing_cd({next_loc.x, next_loc.y}, {curr_loc.x, curr_loc.y}) * 0.01; 
+    int bearing_next_2 = (int)get_bearing_cd({curr_loc.x, curr_loc.y}, {next_loc.x, next_loc.y}) * 0.01; 
 
     //calculate stop displacement
     float thrust_x = pos_control->get_thrust_vector().x;
@@ -688,23 +684,35 @@ Location ModeAuto::set_turn_wp(const Vector2f curr_loc, const Vector2f next_loc)
 
     float speed_ms = inertial_nav.get_speed_xy_cms() * 0.01;
 
-    float thrust_vector_mag = sqrtf( powf(thrust_x,2) + powf(thrust_y,2) );
-    float mass = 4.54f;
+    float thrust_vector_mag = sqrtf( powf(thrust_x,2) + powf(thrust_y,2) ) * 0.01;
+    // float mass = 459.0f; //xplane mass
+    float mass = 4.54f; //ardupilot heli mass
+    float t;
 
-    float t = ((speed_ms * mass) / thrust_vector_mag) + 0.3;
+    if (thrust_vector_mag > 0) {
+        t = ((speed_ms * mass) / (thrust_vector_mag * mass)) + 3;
+    } else {
+        t = 3;
+    }
+
     float displacement_km = speed_ms * t * 0.001;
-
     float distance = calc_distance_two_loc(curr_loc.x, curr_loc.y, next_loc.x, next_loc.y);
     Vector2f vehicle_cur_loc = convert_loc_to_double(AP::gps().location().lat, AP::gps().location().lng);
     float vehicle_distance_from_wp = calc_distance_two_loc(curr_loc.x, curr_loc.y, vehicle_cur_loc.x, vehicle_cur_loc.y) + displacement_km;
-    float gain_r = vehicle_distance_from_wp / distance;
+    float gain_r;
+    if (vehicle_distance_from_wp <= distance) {
+        gain_r = vehicle_distance_from_wp / distance;
+    } else {
+        gain_r = 1;
+    }
+
+    gain_r = 1;
 
     gcs().send_text(MAV_SEVERITY_DEBUG,"THURST:%f, SPEED:%f, DIS: %f ,GAIN:%f", thrust_vector_mag, speed_ms, displacement_km, gain_r);
 
-    // TODO open here when dynamic gain_r added
-    // if (gain_r == 0.5f |55| gain_r < 0.15f || gain_r > 0.85f) {
-    //     gcs().send_text(MAV_SEVERITY_WARNING,"Yaricap Gecersiz Aralikta: %f", gain_r);
-    // }
+    if (gain_r >= 0.475 && gain_r <= 0.525) {
+        gain_r += 0.05;
+    }
 
     float r1 = distance * gain_r;
     float r2 = distance - r1;
@@ -715,46 +723,60 @@ Location ModeAuto::set_turn_wp(const Vector2f curr_loc, const Vector2f next_loc)
 
     Vector2f sphere_point_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_1);
     Vector2f sphere_point_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_2);
-
-    if (r1 > r2) {
-        float length = ((2 * powf(r1, 2)) / (r2 - r1));
-        external_point = calculate_new_location(sphere_point_1.x, sphere_point_1.y, length, bearing_next_1);
-        distance_external_sphere = sqrtf(powf(external_point.x - sphere_point_2.x,2) + powf(external_point.y - sphere_point_2.y,2));
-        angle_rad = acosf(r1/(2*r2+r1+distance_external_sphere));
+    float length;
+    if (abs(r1 - r2) > 0) {
+        if (r1 > r2) {
+            length = ((2 * powf(r1, 2)) / (r2 - r1));
+            external_point = calculate_new_location(sphere_point_1.x, sphere_point_1.y, length, bearing_next_1);
+            distance_external_sphere = sqrtf(powf(external_point.x - sphere_point_2.x,2) + powf(external_point.y - sphere_point_2.y,2));
+            angle_rad = acosf(r1/(2*r2+r1+distance_external_sphere));
+        } else {
+            length = (2 * powf(r2, 2)) / (r1 - r2);
+            external_point = calculate_new_location(sphere_point_2.x, sphere_point_2.y, length, bearing_next_2);
+            distance_external_sphere = sqrtf(powf(external_point.x - sphere_point_1.x,2) + powf(external_point.y - sphere_point_1.y,2));
+            angle_rad = acosf(r2 / (2 * r1 + r2 + distance_external_sphere));
+        }
     } else {
-        float length = (2 * powf(r2, 2)) / (r1 - r2);
-        external_point = calculate_new_location(sphere_point_2.x, sphere_point_2.y, length, bearing_next_2);
-        distance_external_sphere = sqrtf(powf(external_point.x - sphere_point_1.x,2) + powf(external_point.y - sphere_point_1.y,2));
-        angle_rad = acosf(r2 / (2 * r1 + r2 + distance_external_sphere));
+        angle_rad = 0;
     }
 
     float angle_deg = rad2deg(angle_rad);
 
     Vector2f prependicular_1;
     Vector2f prependicular_2;
-    bool is_turn_outside = true;
+    int is_turn_outside = 1; // will change
 
-    //TODO add turn direction condition
-    if (is_turn_outside) {
-       if (r1 > r2) {
-            prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_2 - angle_deg);
-            prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_2 - angle_deg);
-        } else {
-            prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_1 + angle_deg);
-            prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_1 + angle_deg);
+    switch(is_turn_outside) {
+        case 1: {
+            if (r1 > r2) {
+                prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_2 + angle_deg);
+                prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_2 + angle_deg);
+            } else {
+                prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_1 - angle_deg);
+                prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_1 - angle_deg);
+            }
+            break;
         }
-    } else {
-       if (r1 > r2) {
-            prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_2 + angle_deg);
-            prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_2 + angle_deg);
-        } else {
-            prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_1 - angle_deg);
-            prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_1 - angle_deg);
-        } 
+        case 2: {
+            if (r1 > r2) {
+                prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_2 - angle_deg);
+                prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_2 - angle_deg);
+            } else {
+                prependicular_1 = calculate_new_location(curr_loc.x, curr_loc.y, r1, bearing_next_1 + angle_deg);
+                prependicular_2 = calculate_new_location(next_loc.x, next_loc.y, r2, bearing_next_1 + angle_deg);
+            }
+            break;
+        }
+        default:
+        break;
     }
-    
-    float prep_diff = calc_distance_two_loc(prependicular_1.x, prependicular_1.y, prependicular_2.x, prependicular_2.y) / 2;
-    int bearing_new_wp = (int)get_bearing_cd({prependicular_1.x, prependicular_1.y}, {prependicular_2.x, prependicular_2.y}) * 0.01; // added by yigit
+
+    float prep_diff = calc_distance_two_loc(prependicular_1.x, prependicular_1.y, prependicular_2.x, prependicular_2.y);
+    if (abs(prep_diff) > 0) {
+        prep_diff /= 2;
+    }
+
+    int bearing_new_wp = (int)get_bearing_cd({prependicular_1.x, prependicular_1.y}, {prependicular_2.x, prependicular_2.y}) * 0.01; 
 
     Vector2f new_wp_loc = calculate_new_location(prependicular_1.x, prependicular_1.y, prep_diff, bearing_new_wp);
 
@@ -762,19 +784,13 @@ Location ModeAuto::set_turn_wp(const Vector2f curr_loc, const Vector2f next_loc)
     float vehicle_distance_from_new_wp = calc_distance_two_loc(new_wp_loc.x, new_wp_loc.y, vehicle_cur_loc.x, vehicle_cur_loc.y);
 
     //optimize distance
-    // if (vehicle_distance_from_new_wp >= 0.4) {
-    //     vehicle_distance_from_new_wp /= 2;
-    // } 
-    // else if (vehicle_distance_from_new_wp > 0.2 && vehicle_distance_from_new_wp < 0.4) {
-    //     vehicle_distance_from_new_wp /= 1.2;
-    // }
-    vehicle_distance_from_new_wp /= 2;
+    if (abs(vehicle_distance_from_new_wp) > 0) {
+        vehicle_distance_from_new_wp /= 2.75;
+    }
 
-    int bearing_for_optimized_wp = (int)get_bearing_cd({vehicle_cur_loc.x, vehicle_cur_loc.y}, {new_wp_loc.x, new_wp_loc.y}) * 0.01; // added by yigit
+    int bearing_for_optimized_wp = (int)get_bearing_cd({vehicle_cur_loc.x, vehicle_cur_loc.y}, {new_wp_loc.x, new_wp_loc.y}) * 0.01; 
     Vector2f new_optimized_wp_loc = calculate_new_location(vehicle_cur_loc.x, vehicle_cur_loc.y, vehicle_distance_from_new_wp, bearing_for_optimized_wp);
     
-    gcs().send_text(MAV_SEVERITY_DEBUG,"Optimized: (%f,%f)", new_wp_loc.x, new_wp_loc.y);
-
     // set new loc
     new_wp.lng = (int32_t)(new_optimized_wp_loc.y * 10000000);
     new_wp.lat = (int32_t)(new_optimized_wp_loc.x * 10000000);
@@ -801,7 +817,7 @@ bool ModeAuto::start_command(const AP_Mission::Mission_Command& cmd)
 
     case MAV_CMD_NAV_WAYPOINT:                  // 16  Navigate to Waypoint
     {
-        curr_cmd = cmd; //added by yigit
+        curr_cmd = cmd;
         do_nav_wp(cmd); 
         break;
     }
